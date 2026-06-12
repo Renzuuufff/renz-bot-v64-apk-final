@@ -1,0 +1,93 @@
+name: Build RENZ Bot v64 APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show root files
+        run: ls -la
+
+      - name: Find uploaded ZIP package
+        run: |
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in repository root."
+            exit 1
+          fi
+          echo "ZIP_FILE=$ZIP_FILE" >> $GITHUB_ENV
+          echo "Found ZIP: $ZIP_FILE"
+
+      - name: Extract outer package
+        run: |
+          mkdir outer_package
+          unzip -o "$ZIP_FILE" -d outer_package
+          echo "Outer package contents:"
+          find outer_package -maxdepth 3 -type f
+
+      - name: Find and extract Android project payload
+        run: |
+          PAYLOAD=$(find outer_package -name "*payload*.zip" -o -name "*project*.zip" | head -n 1)
+
+          if [ -z "$PAYLOAD" ]; then
+            echo "No nested payload ZIP found. Trying outer package as Android project."
+            mkdir renz_project
+            cp -r outer_package/* renz_project/ || true
+          else
+            echo "Found payload: $PAYLOAD"
+            mkdir renz_project
+            unzip -o "$PAYLOAD" -d renz_project
+          fi
+
+          echo "Extracted project files:"
+          find renz_project -maxdepth 4 -type f | head -n 100
+
+      - name: Find Android project directory
+        run: |
+          FOUND=$(find renz_project -name settings.gradle -type f | head -n 1)
+
+          if [ -z "$FOUND" ]; then
+            echo "ERROR: settings.gradle not found. Android project not found inside ZIP."
+            exit 1
+          fi
+
+          DIR=$(dirname "$FOUND")
+          echo "PROJECT_DIR=$DIR" >> $GITHUB_ENV
+          echo "Project directory: $DIR"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RENZ-Bot-v64-APK
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
